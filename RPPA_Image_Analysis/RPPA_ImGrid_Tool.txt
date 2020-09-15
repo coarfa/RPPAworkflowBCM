@@ -1,0 +1,400 @@
+% Author: Dimuthu N. Perera
+% Baylor College of Medicine
+% email: dimuthu_np@yahoo.com
+% Sep 2020; Last revision: 15-Sep-2020
+
+classdef RPPA_ImGrid_Tool < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        RPPAImGridToolUIFigure   matlab.ui.Figure
+        FileMenu                 matlab.ui.container.Menu
+        ExitMenu                 matlab.ui.container.Menu
+        HelpMenu                 matlab.ui.container.Menu
+        ViewHelpMenu             matlab.ui.container.Menu
+        AboutRPPAImGridToolMenu  matlab.ui.container.Menu
+        GridLayout               matlab.ui.container.GridLayout
+        TabGroup                 matlab.ui.container.TabGroup
+        MainTab                  matlab.ui.container.Tab
+        RunButton                matlab.ui.control.Button
+        UIAxes                   matlab.ui.control.UIAxes
+        TextArea                 matlab.ui.control.TextArea
+        Logo                     matlab.ui.control.Image
+        AnnotationTab            matlab.ui.container.Tab
+        GridLayout2              matlab.ui.container.GridLayout
+        BrowseButton             matlab.ui.control.Button
+        CreateLabelsButton       matlab.ui.control.Button
+        ProgressBar              matlab.ui.control.Image
+        Done                     matlab.ui.control.Image
+        Image                    matlab.ui.control.Image
+    end
+
+    
+    properties (Access = private)
+        banner =  'Banner.png'; % The banner image
+        imds;imgs;numJPGs;blocks;iter;block_specs;
+        labelfilename;labelfileloc;
+    end
+       
+    methods (Access = private)
+        
+        function FetchData(app, file)
+ 
+            
+            app.imds = imageDatastore(file,'FileExtensions',{'.jpg'});
+            app.imgs = readall(app.imds);
+            app.numJPGs = length(app.imgs);
+
+            galFile = dir(strcat(file,'*.gal'));
+            myGAL = importdata(fullfile(galFile.folder, galFile.name),'\t', 6);
+
+            
+            app.blocks = myGAL.Header.Block; 
+            app.iter = length(app.blocks);
+            app.block_specs = zeros(app.iter, 4, 'uint16'); 
+
+            
+            numImages = sprintf('Number of images to process = %d\n\n', app.numJPGs);
+            app.TextArea.Value = numImages;
+            drawnow()
+            
+        end
+        
+        function ImGrid(app)
+            for a = 1: app.numJPGs
+                if endsWith(app.imds.Files{a},'.jpg')
+                    [filepath, name, ~] = fileparts(app.imds.Files{a});
+                    
+                    gprFilename = strcat(fullfile(filepath, name(1:end-3)), '.gpr');
+                    if exist(gprFilename)==0
+                        continue;
+                    end
+                    
+                    disp_name = sprintf('%d. %s\n',a,name);
+                    app.TextArea.Value = [string(app.TextArea.Value);string(disp_name)];
+
+                    myGPR = importdata(gprFilename,'\t', 35); % header row ends at line 33
+                    PixelSize = myGPR.Header.PixelSize; % line 7 of gpr
+                    JpegOrigin = myGPR.Header.JpegOrigin./PixelSize;
+                    circle_data = myGPR.Data(:,1:3)./PixelSize; % selects only X Y Dia. columns
+        
+                    blocks_temp = round(app.blocks./[PixelSize, PixelSize, PixelSize, 1, PixelSize, 1, PixelSize]);
+        
+                    for b = 1: app.iter
+                        X = blocks_temp(b,1) - blocks_temp(b,3)/2 - (blocks_temp(1,1)-circle_data(1,1)) - JpegOrigin(1); 
+                        Y = blocks_temp(b,2) - blocks_temp(b,3)/2 - (blocks_temp(1,2)-circle_data(1,2)) - JpegOrigin(2); 
+                        w = (blocks_temp(b,4)-1)*blocks_temp(b,5) + blocks_temp(b,3);
+                        h = (blocks_temp(b,6)-1)*blocks_temp(b,7) + blocks_temp(b,3);
+        
+                        app.block_specs(b,:) = [X, Y, w, h];        
+                    end
+                    
+                    J = insertShape(app.imgs{a},'rectangle',[app.block_specs(:,1) app.block_specs(:,2) app.block_specs(:,3) app.block_specs(:,4)],'LineWidth',4);
+                    J = insertShape(J,'circle',[circle_data(:,1)-JpegOrigin(1) circle_data(:,2)-JpegOrigin(2) circle_data(:,3)/2], 'Color', 'green', 'LineWidth',3);
+
+                    I = imshow(J,'Parent', app.UIAxes);
+                    app.UIAxes.XLim = [0 I.XData(2)];
+                    app.UIAxes.YLim = [0 I.YData(2)];
+                    
+                    pause(0.01)
+                    drawnow()
+                    
+                    imwrite(J, strcat(fullfile(filepath,'Processed'), '\p_', name, '.jpg'));
+                end
+
+            end
+            
+        end
+        
+        
+        function I_labeled = SpotAnnotation(app)
+            app.ProgressBar.Visible = 'on';
+            drawnow;
+            spltpos = find(app.labelfilename == '_',1,'Last');
+            gprfilename = strcat(app.labelfilename(1:spltpos-1),'.gpr');
+            
+            imf = fullfile(app.labelfileloc,app.labelfilename);
+            gprf = fullfile(app.labelfileloc,gprfilename); 
+
+            I = imread(imf);
+            
+            myGPR = importdata(gprf,'\t', 33);
+            
+            PixelSize = myGPR.Header.PixelSize; 
+            JpegOrigin = myGPR.Header.JpegOrigin./PixelSize;
+            
+            Labels = cat(2, num2cell(myGPR.Data(:,1:2)./PixelSize), myGPR.Names); 
+            L_labels = Labels(1:6:end,:);
+            R_labels = Labels(4:6:end,:);
+            
+            L_labeled = insertText(I,[cell2mat(L_labels(:,1))-JpegOrigin(1) cell2mat(L_labels(:,2))-JpegOrigin(2)-10],L_labels(:,3),'TextColor','w','BoxColor','blue','BoxOpacity',0.4);
+            I_labeled = insertText(L_labeled,[cell2mat(R_labels(:,1))-JpegOrigin(1) cell2mat(R_labels(:,2))-JpegOrigin(2)-10],R_labels(:,3),'TextColor','w','BoxColor','red','BoxOpacity',0.4);
+            
+            %figure, imshow(I_labeled,[])
+            imwrite(I_labeled, strcat('Labeled_',app.labelfilename));
+            
+            app.ProgressBar.Visible = 'off';
+            app.Done.Visible = 'on';
+            app.CreateLabelsButton.Enable = 'off';
+            drawnow;
+
+        end
+    end
+    
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Code that executes after component creation
+        function startupFcn(app)
+            imshow(app.banner,'Parent', app.UIAxes);     
+        end
+
+        % Button pushed function: RunButton
+        function RunButtonPushed(app, event)
+            [~, imfolder] = uigetfile({'*.jpg'},'Select an image file');
+
+            if ~exist(string(imfolder), 'dir')
+                app.TextArea.Value = {'Directory not selected.';...
+                                      'Please click Run, select an image and click Open.'};
+            else
+                app.TextArea.Value = 'Processing...';
+                drawnow()
+                
+                if ~exist(fullfile(imfolder,'Processed'), 'dir')
+                    mkdir(fullfile(imfolder,'Processed'))
+                end                 
+                
+                FetchData(app, imfolder);
+                ImGrid(app);
+                app.TextArea.Value = [string(app.TextArea.Value);'';'Complete!'];
+            end 
+            
+        end
+
+        % Menu selected function: ExitMenu
+        function ExitMenuSelected(app, event)
+            delete(app)
+        end
+
+        % Menu selected function: AboutRPPAImGridToolMenu
+        function AboutRPPAImGridToolMenuSelected(app, event)
+            myicon = imread('icon.png');
+            msgbox({['Description: ImGrid Tool: Provides a visual evaluation of gridding' ...
+                ' accuracy for Microarray Analysis software. Spot Annotation Tool: Prints ' ...
+                'sample labels onto the technical triplicate sample spots in the array images.'];'';...
+                    'Author: Dimuthu N. Perera';'Contact: dimuthu_np@yahoo.com';'Version: 3.00';''}, 'About', 'custom', myicon);
+        end
+
+        % Menu selected function: ViewHelpMenu
+        function ViewHelpMenuSelected(app, event)
+            helpdlg({'Prerequisites:','','    1. Input image(s) must be in .jpg format.',...
+                                      '    2. All the Image(s), .gpr file(s) and .gal file',...
+                                      '        must be in the same directory.',...
+                                      '    3. File names of image(s) and .gpr file(s) must match',...
+                                      '        (except for last 3 characters). e.g. ''<>_A1.jpg''',...
+                       '','How to Run:','', '    Click Run, select any image and press Open.',...
+                       '', 'Output:','','    Results will be created in ''Processed'' directory.',''}, 'Help');            
+        end
+
+        % Button pushed function: BrowseButton
+        function BrowseButtonPushed(app, event)
+            app.Done.Visible = 'off';
+            drawnow;
+            [app.labelfilename, app.labelfileloc] = uigetfile({'*.jpg'},'Select an image file to Label');          
+            app.CreateLabelsButton.Enable = 'on';
+            drawnow;
+
+            
+        end
+
+        % Button pushed function: CreateLabelsButton
+        function CreateLabelsButtonPushed(app, event)
+            I = SpotAnnotation(app);
+            figure('Name','Annotated Spot Array','NumberTitle','off','MenuBar',...
+                'none','ToolBar', 'none'); 
+            imshow(I, []);
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create RPPAImGridToolUIFigure and hide until all components are created
+            app.RPPAImGridToolUIFigure = uifigure('Visible', 'off');
+            app.RPPAImGridToolUIFigure.Color = [1 1 1];
+            app.RPPAImGridToolUIFigure.Position = [100 100 700 500];
+            app.RPPAImGridToolUIFigure.Name = 'RPPA ImGrid Tool';
+            app.RPPAImGridToolUIFigure.HandleVisibility = 'on';
+
+            % Create FileMenu
+            app.FileMenu = uimenu(app.RPPAImGridToolUIFigure);
+            app.FileMenu.Text = 'File';
+
+            % Create ExitMenu
+            app.ExitMenu = uimenu(app.FileMenu);
+            app.ExitMenu.MenuSelectedFcn = createCallbackFcn(app, @ExitMenuSelected, true);
+            app.ExitMenu.Text = 'Exit';
+
+            % Create HelpMenu
+            app.HelpMenu = uimenu(app.RPPAImGridToolUIFigure);
+            app.HelpMenu.Text = 'Help';
+
+            % Create ViewHelpMenu
+            app.ViewHelpMenu = uimenu(app.HelpMenu);
+            app.ViewHelpMenu.MenuSelectedFcn = createCallbackFcn(app, @ViewHelpMenuSelected, true);
+            app.ViewHelpMenu.Text = 'View Help';
+
+            % Create AboutRPPAImGridToolMenu
+            app.AboutRPPAImGridToolMenu = uimenu(app.HelpMenu);
+            app.AboutRPPAImGridToolMenu.MenuSelectedFcn = createCallbackFcn(app, @AboutRPPAImGridToolMenuSelected, true);
+            app.AboutRPPAImGridToolMenu.Text = 'About RPPA ImGrid Tool';
+
+            % Create GridLayout
+            app.GridLayout = uigridlayout(app.RPPAImGridToolUIFigure);
+            app.GridLayout.ColumnWidth = {'1x', '1x', '1x', 170, '1x', '1x'};
+            app.GridLayout.RowHeight = {'fit', '2.35x', '1x', 43, '1x'};
+
+            % Create TabGroup
+            app.TabGroup = uitabgroup(app.GridLayout);
+            app.TabGroup.Layout.Row = [1 5];
+            app.TabGroup.Layout.Column = [1 6];
+
+            % Create MainTab
+            app.MainTab = uitab(app.TabGroup);
+            app.MainTab.Title = 'Main';
+
+            % Create RunButton
+            app.RunButton = uibutton(app.MainTab, 'push');
+            app.RunButton.ButtonPushedFcn = createCallbackFcn(app, @RunButtonPushed, true);
+            app.RunButton.FontName = 'Tahoma';
+            app.RunButton.FontSize = 16;
+            app.RunButton.FontWeight = 'bold';
+            app.RunButton.Position = [221 65 92 39.9519632414369];
+            app.RunButton.Text = 'Run';
+
+            % Create UIAxes
+            app.UIAxes = uiaxes(app.MainTab);
+            title(app.UIAxes, '')
+            xlabel(app.UIAxes, '')
+            ylabel(app.UIAxes, '')
+            app.UIAxes.ClippingStyle = 'rectangle';
+            app.UIAxes.XColor = 'none';
+            app.UIAxes.XTick = [];
+            app.UIAxes.YColor = 'none';
+            app.UIAxes.YTick = [];
+            app.UIAxes.Color = 'none';
+            app.UIAxes.Visible = 'off';
+            app.UIAxes.BackgroundColor = [0.949 0.949 0.949];
+            app.UIAxes.Clipping = 'off';
+            app.UIAxes.Position = [11 7 190 440];
+
+            % Create TextArea
+            app.TextArea = uitextarea(app.MainTab);
+            app.TextArea.Editable = 'off';
+            app.TextArea.FontSize = 14;
+            app.TextArea.FontColor = [0.149 0.149 0.149];
+            app.TextArea.BackgroundColor = [0 0 0];
+            app.TextArea.Position = [221 127 440 320];
+
+            % Create Logo
+            app.Logo = uiimage(app.MainTab);
+            app.Logo.HorizontalAlignment = 'right';
+            app.Logo.Position = [571 22 92 92.9519632414369];
+            app.Logo.ImageSource = 'logo.png';
+
+            % Create AnnotationTab
+            app.AnnotationTab = uitab(app.TabGroup);
+            app.AnnotationTab.Title = 'Annotation';
+            app.AnnotationTab.BackgroundColor = [0.949 0.9098 0.8941];
+
+            % Create GridLayout2
+            app.GridLayout2 = uigridlayout(app.AnnotationTab);
+            app.GridLayout2.ColumnWidth = {189.83, 129.83, 29.83, 129.83, 79.83, 118.83};
+            app.GridLayout2.RowHeight = {226, 33, '1x', 100};
+            app.GridLayout2.ColumnSpacing = 0;
+            app.GridLayout2.Padding = [0 10 0 10];
+
+            % Create BrowseButton
+            app.BrowseButton = uibutton(app.GridLayout2, 'push');
+            app.BrowseButton.ButtonPushedFcn = createCallbackFcn(app, @BrowseButtonPushed, true);
+            app.BrowseButton.BackgroundColor = [0.2392 0.5216 0.4784];
+            app.BrowseButton.FontSize = 14;
+            app.BrowseButton.FontWeight = 'bold';
+            app.BrowseButton.FontColor = [1 1 1];
+            app.BrowseButton.Tooltip = {'Browse the image to be labeled'};
+            app.BrowseButton.Layout.Row = 2;
+            app.BrowseButton.Layout.Column = 2;
+            app.BrowseButton.Text = 'Browse';
+
+            % Create CreateLabelsButton
+            app.CreateLabelsButton = uibutton(app.GridLayout2, 'push');
+            app.CreateLabelsButton.ButtonPushedFcn = createCallbackFcn(app, @CreateLabelsButtonPushed, true);
+            app.CreateLabelsButton.BackgroundColor = [0.2392 0.5216 0.4784];
+            app.CreateLabelsButton.FontSize = 14;
+            app.CreateLabelsButton.FontWeight = 'bold';
+            app.CreateLabelsButton.FontColor = [1 1 1];
+            app.CreateLabelsButton.Enable = 'off';
+            app.CreateLabelsButton.Layout.Row = 2;
+            app.CreateLabelsButton.Layout.Column = 4;
+            app.CreateLabelsButton.Text = 'Create Labels';
+
+            % Create ProgressBar
+            app.ProgressBar = uiimage(app.GridLayout2);
+            app.ProgressBar.Visible = 'off';
+            app.ProgressBar.Layout.Row = 4;
+            app.ProgressBar.Layout.Column = 6;
+            app.ProgressBar.ImageSource = 'progressbar.gif';
+
+            % Create Done
+            app.Done = uiimage(app.GridLayout2);
+            app.Done.Visible = 'off';
+            app.Done.Layout.Row = 4;
+            app.Done.Layout.Column = 6;
+            app.Done.ImageSource = 'done.png';
+
+            % Create Image
+            app.Image = uiimage(app.GridLayout2);
+            app.Image.ScaleMethod = 'fill';
+            app.Image.Layout.Row = 1;
+            app.Image.Layout.Column = [1 6];
+            app.Image.HorizontalAlignment = 'left';
+            app.Image.VerticalAlignment = 'top';
+            app.Image.ImageSource = 'Anno_banner.png';
+
+            % Show the figure after all components are created
+            app.RPPAImGridToolUIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = RPPA_ImGrid_Tool
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.RPPAImGridToolUIFigure)
+
+            % Execute the startup function
+            runStartupFcn(app, @startupFcn)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.RPPAImGridToolUIFigure)
+        end
+    end
+end
